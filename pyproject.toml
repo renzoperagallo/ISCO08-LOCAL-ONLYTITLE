@@ -1,0 +1,30 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "isco08-local-onlytitle"
+version = "0.1.0"
+description = "Clasificador local CIUO-08.CL usando solo el titulo y Gemma 4 E4B"
+requires-python = ">=3.11"
+dependencies = [
+  "pandas>=2.2",
+  "numpy>=1.26",
+  "openpyxl>=3.1",
+  "pyarrow>=15.0",
+  "sentence-transformers>=3.0",
+  "torch>=2.4",
+  "httpx>=0.28",
+  "python-dotenv>=1.0",
+  "tqdm>=4.66",
+]
+
+[project.optional-dependencies]
+dev = ["pytest>=8.0"]
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["src"]

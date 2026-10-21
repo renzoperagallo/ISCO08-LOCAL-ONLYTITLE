@@ -1,0 +1,14 @@
+{
+  "source": "/home/rpd/Documentos/Proyectos/clasificador_ciuo_api/contexto/ciuo-08-cL.xlsx",
+  "source_sha256": "0cc7bbd52eee8d5bfb3bcdb3f3ada0544d3d3c153e6d54ac39f24a8e732c973e",
+  "generated_at": "2026-10-20T22:49:02.610995+00:00",
+  "seed": 42,
+  "split_rule": "1 ejemplo a test por codigo cuando hay >= 2; el resto a train",
+  "unit_groups": 444,
+  "examples_total": 2325,
+  "examples_train": 1912,
+  "examples_test": 413,
+  "codes_with_test": 413,
+  "codes_single_example": 31,
+  "hierarchy_rows": 627
+}

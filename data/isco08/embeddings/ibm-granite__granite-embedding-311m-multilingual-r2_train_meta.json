@@ -1,0 +1,8 @@
+{
+  "model": "ibm-granite/granite-embedding-311m-multilingual-r2",
+  "device": "cuda",
+  "dimension": 768,
+  "count": 444,
+  "split": "train",
+  "texts_sha256": "389c2688dbdd9a5978165978108bbd6c00db7e9e135463c21b89de53422a647d"
+}
