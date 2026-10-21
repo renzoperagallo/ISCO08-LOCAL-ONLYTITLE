@@ -233,8 +233,8 @@ def load_candidate_embeddings(
     npy_path, parquet_path, _ = candidate_cache_paths(out_dir, model_slug, split)
     if not npy_path.exists() or not parquet_path.exists():
         raise FileNotFoundError(
-            f"No existen embeddings para split={split}. "
-            "Ejecuta `make embed` o `python scripts/build_embeddings.py --split both`."
+            f"No existen embeddings para split={split} en {out_dir}. "
+            "Revisa que data/isco08/embeddings/ este completo."
         )
     candidates = load_candidates(parquet_path)
     embeddings = np.load(npy_path)
