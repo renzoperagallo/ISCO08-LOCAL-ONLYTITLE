@@ -53,12 +53,14 @@ id,title
 3,Operario de línea de envasado
 ```
 
-Archivos incluidos:
+Archivo incluido:
 
 ```text
-data/input/empleos_1000_titles.csv
 data/input/sample10.csv
 ```
+
+El archivo completo de 1.000 títulos **no se incluye** en el repositorio. Para
+usarlo, pasa tu propio CSV con `INPUT=...`.
 
 ## Instalación
 
@@ -82,15 +84,15 @@ make ollama-check
 ## Uso
 
 ```bash
-make smoke     # primeros 10 títulos
-make run       # los 1.000 títulos
-make resume    # continúa desde el checkpoint
+make smoke     # primeros 10 títulos incluidos
+make run INPUT=ruta/a/tu_archivo.csv RUN_NAME=mi_corrida
+make resume INPUT=ruta/a/tu_archivo.csv RUN_NAME=mi_corrida
 ```
 
-También se puede cambiar el archivo o el tamaño de lote:
+También se puede cambiar el tamaño de lote:
 
 ```bash
-make run INPUT=data/input/empleos_1000_titles.csv BATCH_SIZE=10 RUN_NAME=titles
+make run INPUT=ruta/a/tu_archivo.csv BATCH_SIZE=10 RUN_NAME=mi_corrida
 ```
 
 ## Prompt de clasificación
@@ -163,8 +165,8 @@ generation_tokens_per_s
 
 ## Checkpoint
 
-`make run` empieza de cero: borra checkpoint y salidas.
-`make resume` continúa desde `outputs/checkpoints/titles.jsonl`.
+`make run INPUT=...` empieza de cero: borra checkpoint y salidas.
+`make resume INPUT=...` continúa desde el checkpoint de ese `RUN_NAME`.
 
 El runner procesa por lotes. Si se interrumpe durante las llamadas de un lote,
 ese lote puede repetirse; los lotes ya cerrados no se recalculan.
@@ -217,7 +219,7 @@ make test
   encajar perfectamente.
 - La `distance` es una distancia de embeddings, no una probabilidad.
 - El razonamiento local agrega latencia.
-- `make run` puede tardar horas para 1.000 títulos en una GPU de 6 GB.
+- Una corrida grande puede tardar horas en una GPU de 6 GB.
 
 ## Licencia
 

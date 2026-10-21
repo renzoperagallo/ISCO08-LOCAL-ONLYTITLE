@@ -18,9 +18,11 @@ smoke:
 	$(PY) scripts/run.py --input $(SAMPLE) --batch-size 5 --run-name smoke10 --fresh
 
 run:
+	@test -f "$(INPUT)" || (echo "No existe $(INPUT). Pasa INPUT=ruta/a/tu_archivo.csv"; exit 1)
 	$(PY) scripts/run.py --input $(INPUT) --batch-size $(BATCH_SIZE) --run-name $(RUN_NAME) --fresh
 
 resume:
+	@test -f "$(INPUT)" || (echo "No existe $(INPUT). Pasa INPUT=ruta/a/tu_archivo.csv"; exit 1)
 	$(PY) scripts/run.py --input $(INPUT) --batch-size $(BATCH_SIZE) --run-name $(RUN_NAME)
 
 test:

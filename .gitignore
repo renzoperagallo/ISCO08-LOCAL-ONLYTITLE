@@ -14,3 +14,7 @@ logs/
 .ollama-dist/
 .ollama/
 models/
+
+# Datos de entrada privados: solo se publica sample10.csv
+data/input/*.csv
+!data/input/sample10.csv
