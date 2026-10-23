@@ -1,7 +1,9 @@
 from __future__ import annotations
 
+import gc
 import hashlib
 import json
+import sys
 from pathlib import Path
 from typing import Sequence
 
@@ -38,28 +40,59 @@ class GraniteEmbedder:
         batch_size: int = 64,
     ) -> None:
         self.model_name = model_name
-        self.requested_device = device
-        self.batch_size = batch_size
+        self.requested_device = str(device).strip().lower() or "auto"
+        self.batch_size = max(1, int(batch_size))
         self._model = None
         self._device = None
 
     def _resolve_device(self) -> str:
-        if self.requested_device in {"cpu", "cuda"}:
-            if self.requested_device == "cuda":
-                try:
-                    import torch
+        requested = self.requested_device
 
-                    if not torch.cuda.is_available():
-                        raise RuntimeError("Se pidio cuda pero no hay GPU disponible.")
-                except ImportError as exc:
-                    raise RuntimeError("PyTorch no esta instalado.") from exc
-            return self.requested_device
-        try:
-            import torch
-
+        if requested in {"", "auto"}:
+            try:
+                import torch
+            except ImportError:
+                return "cpu"
             return "cuda" if torch.cuda.is_available() else "cpu"
-        except ImportError:
+
+        if requested == "cpu":
             return "cpu"
+
+        if requested.startswith("cuda"):
+            try:
+                import torch
+            except ImportError as exc:
+                raise RuntimeError("PyTorch no esta instalado.") from exc
+            if not torch.cuda.is_available():
+                raise RuntimeError("Se pidio cuda pero no hay GPU disponible.")
+            if ":" in requested:
+                try:
+                    index = int(requested.split(":", 1)[1])
+                except ValueError as exc:
+                    raise RuntimeError(
+                        f"Dispositivo CUDA invalido: {requested!r}. Usa cuda o cuda:N."
+                    ) from exc
+                if index < 0 or index >= torch.cuda.device_count():
+                    raise RuntimeError(
+                        f"GPU {index} no disponible; hay "
+                        f"{torch.cuda.device_count()} GPU(s)."
+                    )
+            return requested
+
+        if requested == "mps":
+            try:
+                import torch
+            except ImportError as exc:
+                raise RuntimeError("PyTorch no esta instalado.") from exc
+            mps = getattr(torch.backends, "mps", None)
+            if mps is None or not mps.is_available():
+                raise RuntimeError("Se pidio mps pero no esta disponible.")
+            return "mps"
+
+        raise RuntimeError(
+            f"EMBEDDING_DEVICE invalido: {self.requested_device!r}. "
+            "Usa cpu, cuda, cuda:N, mps o auto."
+        )
 
     def load(self) -> None:
         if self._model is not None:
@@ -72,12 +105,33 @@ class GraniteEmbedder:
             ) from exc
         self._device = self._resolve_device()
         self._model = SentenceTransformer(self.model_name, device=self._device)
+        print(
+            f"[embedder] modelo={self.model_name} dispositivo={self._device}",
+            file=sys.stderr,
+        )
 
     @property
     def device(self) -> str:
         if self._device is None:
             self.load()
         return str(self._device)
+
+    @property
+    def resolved_device(self) -> str | None:
+        """Dispositivo ya resuelto, sin forzar la carga del modelo."""
+        return str(self._device) if self._device is not None else None
+
+    def _release_model(self) -> None:
+        had_cuda = self._device is not None and str(self._device).startswith("cuda")
+        self._model = None
+        gc.collect()
+        if had_cuda:
+            try:
+                import torch
+
+                torch.cuda.empty_cache()
+            except ImportError:
+                pass
 
     @property
     def dimension(self) -> int:
@@ -93,9 +147,9 @@ class GraniteEmbedder:
         texts = [str(text) for text in texts]
         if not texts:
             return np.zeros((0, self.dimension), dtype=np.float32)
-        self.load()
-        size = batch_size or self.batch_size
+        size = max(1, int(batch_size or self.batch_size))
         try:
+            self.load()
             embeddings = self._model.encode(
                 texts,
                 batch_size=size,
@@ -105,14 +159,24 @@ class GraniteEmbedder:
             )
         except RuntimeError as exc:
             message = str(exc).lower()
-            if "out of memory" in message and self._device == "cuda":
-                import torch
-
-                torch.cuda.empty_cache()
-                self._model = None
+            if (
+                "out of memory" in message
+                and self._device is not None
+                and str(self._device).startswith("cuda")
+            ):
+                print(
+                    f"[embedder] CUDA OOM en {self._device}; "
+                    "reintentando en CPU.",
+                    file=sys.stderr,
+                )
+                self._release_model()
                 self.requested_device = "cpu"
                 self._device = None
-                return self.encode(texts, batch_size=size, show_progress_bar=show_progress_bar)
+                return self.encode(
+                    texts,
+                    batch_size=size,
+                    show_progress_bar=show_progress_bar,
+                )
             raise
         return l2_normalize(np.asarray(embeddings, dtype=np.float32))
 
@@ -267,12 +331,16 @@ def encode_queries_cached(
             return np.load(cache_path)
 
     embeddings = embedder.encode(texts, show_progress_bar=show_progress_bar)
+    resolved_device = getattr(embedder, "resolved_device", None)
+    if resolved_device is None:
+        resolved_device = getattr(embedder, "device", None)
     cache_path.parent.mkdir(parents=True, exist_ok=True)
     np.save(cache_path, embeddings)
     meta_path.write_text(
         json.dumps(
             {
                 "model": embedder.model_name,
+                "device": str(resolved_device) if resolved_device is not None else None,
                 "count": len(texts),
                 "dimension": int(embeddings.shape[1]),
                 "texts_sha256": text_hash,

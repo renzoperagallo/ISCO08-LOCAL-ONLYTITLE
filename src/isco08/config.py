@@ -83,7 +83,7 @@ class Settings:
         ).strip()
     )
     embedding_device: str = field(
-        default_factory=lambda: os.getenv("EMBEDDING_DEVICE", "cpu").strip()
+        default_factory=lambda: os.getenv("EMBEDDING_DEVICE", "cpu").strip().lower()
     )
     embedding_batch_size: int = field(
         default_factory=lambda: _env_int("EMBEDDING_BATCH_SIZE", 64)
@@ -112,8 +112,11 @@ class Settings:
     def __post_init__(self) -> None:
         if self.classification_max_tokens <= 0:
             self.classification_max_tokens = 8192 if self.ollama_thinking else 256
-        if self.embedding_device == "auto":
-            self.embedding_device = "cpu"
+        self.embedding_device = str(self.embedding_device).strip().lower()
+        if self.max_workers < 1:
+            raise ValueError("MAX_WORKERS debe ser >= 1")
+        if self.embedding_batch_size < 1:
+            raise ValueError("EMBEDDING_BATCH_SIZE debe ser >= 1")
 
     @property
     def model_slug(self) -> str:

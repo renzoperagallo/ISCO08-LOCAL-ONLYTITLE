@@ -3,8 +3,6 @@
 Clasificador local de títulos de empleo en códigos **CIUO-08.CL**, usando
 solamente el título del anuncio.
 
-El flujo es:
-
 ```text
 title → embedding → distancia coseno → top-10 → Gemma → código
 ```
@@ -12,16 +10,237 @@ title → embedding → distancia coseno → top-10 → Gemma → código
 No usa `body`, no extrae tareas, no detecta jefaturas y no hace una segunda
 reclasificación. Cada título genera **una sola llamada a Gemma**.
 
-## Componentes
+## Instalación y configuración
+
+### Requisitos
+
+- Python 3.11.
+- Ollama con el modelo `hf.co/unsloth/gemma-4-E4B-it-GGUF:Q4_K_S`.
+- Opcional: GPU NVIDIA con CUDA para Gemma y, si hay VRAM suficiente, para el
+  modelo de embeddings.
+
+### 1. Instalar el proyecto
+
+```bash
+make install
+```
+
+Esto crea `.venv` e instala las dependencias. Si no existe `.env`, créalo a
+partir de la plantilla:
+
+```bash
+cp .env.example .env
+```
+
+`.env` no se versiona; `.env.example` es la plantilla para otros equipos.
+
+### 2. Descargar el modelo
+
+```bash
+ollama pull hf.co/unsloth/gemma-4-E4B-it-GGUF:Q4_K_S
+```
+
+Si Ollama está instalado en otra ruta, define `OLLAMA_BIN` y `OLLAMA_MODELS` en
+`.env` antes de arrancarlo.
+
+### 3. Configurar el paralelismo
+
+Hay dos niveles:
+
+- `MAX_WORKERS` (cliente): cuántas peticiones `/api/chat` se envían a la vez.
+- `OLLAMA_NUM_PARALLEL` (servidor): cuántas peticiones procesa Ollama a la vez.
+
+Para que haya aceleración real:
+
+```text
+OLLAMA_NUM_PARALLEL >= MAX_WORKERS
+```
+
+El proyecto puede arrancar Ollama con la configuración correcta:
+
+```bash
+make ollama-start NUM_PARALLEL=3
+# o en segundo plano:
+make ollama-start-bg NUM_PARALLEL=3
+```
+
+Si `NUM_PARALLEL=0` (el valor por defecto), se usa `OLLAMA_NUM_PARALLEL` del
+`.env` y se eleva automáticamente a `MAX_WORKERS` si es menor. El lanzador
+también:
+
+- fija `OLLAMA_CONTEXT_LENGTH` desde `OLLAMA_NUM_CTX`;
+- usa `OLLAMA_BIN` o `ollama` del `PATH`;
+- pasa `OLLAMA_MODELS` si está definido;
+- no arranca si el puerto ya está ocupado;
+- permite ver el comando con `--dry-run`.
+
+Ejemplo de `.env` para un equipo con VRAM suficiente:
+
+```env
+MAX_WORKERS=3
+OLLAMA_NUM_PARALLEL=3
+EMBEDDING_DEVICE=cuda
+EMBEDDING_BATCH_SIZE=64
+```
+
+Para una RTX 3060 de 6 GB:
+
+```env
+MAX_WORKERS=1
+OLLAMA_NUM_PARALLEL=1
+EMBEDDING_DEVICE=cpu
+```
+
+Cada slot paralelo reserva su propio KV cache de `num_ctx` tokens; la VRAM
+crece con `OLLAMA_NUM_PARALLEL`. Valores conservadores:
+
+| VRAM | `MAX_WORKERS` |
+|---|---|
+| 6-8 GB | 1 |
+| 12 GB | 2 |
+| 16 GB | 3 |
+| 24 GB | 4-6 |
+
+`BATCH_SIZE` debe ser mayor o igual que `MAX_WORKERS`. Si Ollama no tiene slots
+libres, las peticiones se encolan; no hay aceleración.
+
+Si Ollama corre como servicio systemd, configura `OLLAMA_NUM_PARALLEL` en el
+servicio (`systemctl edit ollama`) en lugar de usar `make ollama-start`, y
+reinícialo. Si necesitas ahorrar VRAM, puedes probar
+`OLLAMA_FLASH_ATTENTION=1` y `OLLAMA_KV_CACHE_TYPE=q8_0` (verifica que tu
+versión de Ollama los soporte).
+
+Para ver el comando sin ejecutarlo:
+
+```bash
+python scripts/start_ollama.py --num-parallel 3 --dry-run
+```
+
+### 4. Configurar embeddings en GPU (opcional)
+
+```env
+EMBEDDING_DEVICE=cpu    # cpu | cuda | cuda:N | mps | auto
+```
+
+- `cuda` requiere PyTorch con CUDA.
+- `auto` elige CUDA si está disponible; si falla por falta de memoria,
+  reintenta en CPU.
+- En 6 GB conviene `cpu`: Gemma ya ocupa ~3 GB y el embedder compite por VRAM.
+- Los embeddings de los 444 códigos ya están precalculados en
+  `data/isco08/embeddings/` y los de los títulos se cachean. El cuello de
+  botella es la generación de Gemma, no el embedding.
+
+### 5. Verificar la instalación
+
+```bash
+make ollama-check
+make gpu-check
+```
+
+`make gpu-check` muestra la configuración efectiva, la versión de PyTorch,
+CUDA, la VRAM libre y los modelos cargados en Ollama.
+
+## Clasificar casos
+
+### Formato de entrada
+
+CSV con dos columnas:
+
+```csv
+id,title
+1,Recepcionista
+2,Jefe de mantenimiento
+3,Operario de línea de envasado
+```
+
+- `id`: identificador único y no vacío.
+- `title`: título no vacío.
+- No se usa ninguna otra columna.
+
+Archivo de ejemplo incluido:
+
+```text
+data/input/sample10.csv
+```
+
+El archivo completo de 1.000 títulos no se incluye en el repositorio. Para
+usarlo, pasa tu propio CSV con `INPUT=...`.
+
+### Comandos
+
+```bash
+make smoke
+make run INPUT=ruta/a/tu_archivo.csv RUN_NAME=mi_corrida
+make resume INPUT=ruta/a/tu_archivo.csv RUN_NAME=mi_corrida
+```
+
+- `make smoke`: procesa los primeros 10 títulos incluidos.
+- `make run`: empieza de cero y borra el checkpoint y las salidas de ese
+  `RUN_NAME`.
+- `make resume`: continúa desde el checkpoint de ese `RUN_NAME`.
+
+También se pueden ajustar los workers y el tamaño de lote:
+
+```bash
+make run INPUT=ruta/a/tu_archivo.csv RUN_NAME=mi_corrida WORKERS=3 BATCH_SIZE=20
+```
+
+O directamente:
+
+```bash
+python scripts/run.py --input ruta/a/tu_archivo.csv --run-name mi_corrida --workers 3
+```
+
+`--workers 0` usa `MAX_WORKERS` del `.env`.
+
+### Salidas
+
+```text
+outputs/predictions_<run>.csv
+outputs/predictions_<run>.xlsx
+outputs/predictions.csv          # copia estable
+outputs/predictions.xlsx
+outputs/checkpoints/<run>.jsonl
+outputs/run_summary_<run>.json
+```
+
+Columnas principales:
+
+```text
+id, title, code, label,
+distance, similarity,
+corrected, fallback_used,
+llm_response, top_candidates,
+prompt_tokens, completion_tokens,
+latency_s, prompt_eval_s, eval_s,
+generation_tokens_per_s
+```
+
+- `distance`: distancia coseno del top-1.
+- `similarity`: `1 - distance`.
+- `corrected`: el código se reparó por prefijo.
+- `fallback_used`: no se pudo parsear/reparar y se usó el top-1.
+- El resumen JSON incluye la configuración efectiva: modelo, workers, batch,
+  dispositivo de embeddings, tiempos y uso de tokens.
+
+### Checkpoint
+
+El runner procesa por lotes. Si se interrumpe durante las llamadas de un lote,
+ese lote puede repetirse; los lotes ya cerrados no se recalculan. `make resume`
+continúa desde el último checkpoint.
+
+## Cómo funciona
+
+### Componentes
 
 - **Embeddings:** `ibm-granite/granite-embedding-311m-multilingual-r2`
-  (768 dimensiones, CPU).
+  (768 dimensiones; CPU por defecto, configurable a CUDA).
 - **Retriever:** distancia coseno contra los 444 códigos CIUO-08.CL.
 - **Generador:** `hf.co/unsloth/gemma-4-E4B-it-GGUF:Q4_K_S` en Ollama, con
   razonamiento (`<|think|>`).
 - **Taxonomía:** 444 grupos primarios, 2.325 ejemplos de cargos.
 
-## Flujo
+### Flujo
 
 1. Leer `id,title`.
 2. Embeber el título.
@@ -31,6 +250,8 @@ reclasificación. Cada título genera **una sola llamada a Gemma**.
 6. Parsear el código de 4 dígitos.
 7. Validar y reparar por prefijo si es necesario.
 8. Guardar checkpoint, CSV, XLSX y resumen.
+
+### Distancia
 
 La distancia usada es:
 
@@ -42,57 +263,6 @@ Los embeddings están normalizados L2, así que:
 
 ```text
 d = 1 - (vector_título · vector_código)
-```
-
-## Entrada
-
-```csv
-id,title
-1,Recepcionista
-2,Jefe de mantenimiento
-3,Operario de línea de envasado
-```
-
-Archivo incluido:
-
-```text
-data/input/sample10.csv
-```
-
-El archivo completo de 1.000 títulos **no se incluye** en el repositorio. Para
-usarlo, pasa tu propio CSV con `INPUT=...`.
-
-## Instalación
-
-```bash
-make install
-```
-
-Se reutiliza el servidor Ollama existente en `127.0.0.1:11434`. El modelo debe
-estar descargado:
-
-```bash
-ollama pull hf.co/unsloth/gemma-4-E4B-it-GGUF:Q4_K_S
-```
-
-Comprobar:
-
-```bash
-make ollama-check
-```
-
-## Uso
-
-```bash
-make smoke     # primeros 10 títulos incluidos
-make run INPUT=ruta/a/tu_archivo.csv RUN_NAME=mi_corrida
-make resume INPUT=ruta/a/tu_archivo.csv RUN_NAME=mi_corrida
-```
-
-También se puede cambiar el tamaño de lote:
-
-```bash
-make run INPUT=ruta/a/tu_archivo.csv BATCH_SIZE=10 RUN_NAME=mi_corrida
 ```
 
 ## Prompt de clasificación
@@ -134,42 +304,6 @@ Example jobs: ...
 
 Se incluyen 10 candidatos, descripciones de hasta 900 caracteres y hasta 10
 ejemplos por código.
-
-## Salida
-
-```text
-outputs/predictions_titles.csv
-outputs/predictions_titles.xlsx
-outputs/predictions.csv          # copia estable
-outputs/predictions.xlsx
-outputs/checkpoints/titles.jsonl
-outputs/run_summary_titles.json
-```
-
-Columnas principales:
-
-```text
-id, title, code, label,
-distance, similarity,
-corrected, fallback_used,
-llm_response, top_candidates,
-prompt_tokens, completion_tokens,
-latency_s, prompt_eval_s, eval_s,
-generation_tokens_per_s
-```
-
-- `distance`: distancia coseno del top-1.
-- `similarity`: `1 - distance`.
-- `corrected`: el código se reparó por prefijo.
-- `fallback_used`: no se pudo parsear/reparar y se usó el top-1.
-
-## Checkpoint
-
-`make run INPUT=...` empieza de cero: borra checkpoint y salidas.
-`make resume INPUT=...` continúa desde el checkpoint de ese `RUN_NAME`.
-
-El runner procesa por lotes. Si se interrumpe durante las llamadas de un lote,
-ese lote puede repetirse; los lotes ya cerrados no se recalculan.
 
 ## Resultado de la prueba de 10 títulos
 
@@ -220,6 +354,8 @@ make test
 - La `distance` es una distancia de embeddings, no una probabilidad.
 - El razonamiento local agrega latencia.
 - Una corrida grande puede tardar horas en una GPU de 6 GB.
+- En 6 GB conviene `MAX_WORKERS=1` y `EMBEDDING_DEVICE=cpu`: Gemma y el
+  embedder compiten por la misma VRAM.
 
 ## Licencia
 

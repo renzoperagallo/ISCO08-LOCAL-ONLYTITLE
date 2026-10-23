@@ -1,11 +1,15 @@
 from __future__ import annotations
 
+import threading
+import time
+
 import numpy as np
 import pandas as pd
 
 from isco08.config import Settings
+from isco08.llm import ChatResult
 from isco08.ollama_client import OllamaClient
-from isco08.pipeline import JsonlCheckpoint, run_pipeline
+from isco08.pipeline import JsonlCheckpoint, _call_many, run_pipeline
 
 
 class FakeEmbedder:
@@ -84,3 +88,33 @@ def test_checkpoint_keeps_latest_record(tmp_path):
     records = checkpoint.load()
     assert set(records) == {"a", "b"}
     assert records["a"]["code"] == "1112"
+
+
+class _ConcurrentClient:
+    def __init__(self) -> None:
+        self._lock = threading.Lock()
+        self.active = 0
+        self.max_active = 0
+
+    def chat(self, messages, max_tokens=1, temperature=0.0):
+        with self._lock:
+            self.active += 1
+            self.max_active = max(self.max_active, self.active)
+        time.sleep(0.05)
+        with self._lock:
+            self.active -= 1
+        return ChatResult(text="1111")
+
+
+def test_call_many_uses_configured_workers():
+    client = _ConcurrentClient()
+    requests = [
+        {"messages": [], "max_tokens": 8, "temperature": 0.0}
+        for _ in range(4)
+    ]
+
+    results = _call_many(client, requests, max_workers=4, description="test")
+
+    assert len(results) == 4
+    assert all(isinstance(result, ChatResult) for result in results)
+    assert client.max_active >= 2

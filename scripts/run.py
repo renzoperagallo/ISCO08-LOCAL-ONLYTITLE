@@ -13,7 +13,7 @@ import pandas as pd
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(PROJECT_ROOT / "src"))
 
-from isco08.config import get_settings  # noqa: E402
+from isco08.config import Settings, get_settings  # noqa: E402
 from isco08.data_prep import load_labels  # noqa: E402
 from isco08.embeddings import GraniteEmbedder, load_candidate_embeddings  # noqa: E402
 from isco08.ollama_client import OllamaClient  # noqa: E402
@@ -46,7 +46,13 @@ def _normalize_input(path: Path) -> pd.DataFrame:
     return frame
 
 
-def _final_summary(frame: pd.DataFrame, client: OllamaClient, elapsed: float) -> dict:
+def _final_summary(
+    frame: pd.DataFrame,
+    client: OllamaClient,
+    elapsed: float,
+    settings: Settings,
+    batch_size: int,
+) -> dict:
     corrected = (
         frame["corrected"].astype(str).str.lower().eq("true").sum()
         if not frame.empty
@@ -72,6 +78,20 @@ def _final_summary(frame: pd.DataFrame, client: OllamaClient, elapsed: float) ->
         "timing": _timing_summary(frame),
         "elapsed_s": round(elapsed, 2),
         "llm": client.summary(),
+        "settings": {
+            "provider": "ollama",
+            "model": settings.ollama_model,
+            "num_ctx": settings.ollama_num_ctx,
+            "num_gpu": settings.ollama_num_gpu,
+            "thinking": settings.ollama_thinking,
+            "embedding_model": settings.embedding_model,
+            "embedding_device": settings.embedding_device,
+            "embedding_batch_size": settings.embedding_batch_size,
+            "top_k_retrieve": settings.top_k_retrieve,
+            "top_k_prompt": settings.top_k_prompt,
+            "max_workers": settings.max_workers,
+            "batch_size": int(batch_size),
+        },
     }
 
 
@@ -98,7 +118,18 @@ def main() -> None:
         help="Borra el checkpoint y empieza de cero. Sin esto, continua.",
     )
     parser.add_argument("--limit", type=int, default=0, help="0 = todos.")
+    parser.add_argument(
+        "--workers",
+        type=int,
+        default=0,
+        help="Sobrescribe MAX_WORKERS del .env. 0 = usar el valor del .env.",
+    )
     args = parser.parse_args()
+
+    if args.workers:
+        if args.workers < 1:
+            parser.error("--workers debe ser >= 1")
+        settings.max_workers = args.workers
 
     if not args.input.exists():
         raise SystemExit(f"No existe el archivo de entrada: {args.input}")
@@ -152,9 +183,22 @@ def main() -> None:
     )
     print(
         f"[run] entrada={args.input} filas={len(ads)} batch={args.batch_size} "
-        f"modelo={settings.ollama_model} thinking={settings.ollama_thinking} "
-        f"ctx={settings.ollama_num_ctx} metrica=cosine_distance"
+        f"workers={settings.max_workers} modelo={settings.ollama_model} "
+        f"thinking={settings.ollama_thinking} ctx={settings.ollama_num_ctx} "
+        f"metrica=cosine_distance"
     )
+    print(
+        f"[run] embedding={settings.embedding_model} "
+        f"device={settings.embedding_device} "
+        f"batch_embedding={settings.embedding_batch_size}"
+    )
+    if settings.max_workers > 1:
+        print(
+            "[run] aviso: MAX_WORKERS>1 solo acelera si el servidor Ollama "
+            "tiene OLLAMA_NUM_PARALLEL >= MAX_WORKERS. Usa "
+            "`make ollama-start` para arrancarlo con el valor correcto. "
+            "Cada slot extra multiplica el KV cache y consume mas VRAM."
+        )
     print(f"[run] checkpoint={checkpoint_path}")
 
     started = time.monotonic()
@@ -188,7 +232,13 @@ def main() -> None:
     if not csv_path.exists():
         raise SystemExit("No se genero la salida. Revisa el checkpoint y los errores.")
     frame = pd.read_csv(csv_path, dtype=str, keep_default_na=False)
-    summary = _final_summary(frame, client, time.monotonic() - started)
+    summary = _final_summary(
+        frame,
+        client,
+        time.monotonic() - started,
+        settings,
+        args.batch_size,
+    )
     summary_path.write_text(
         json.dumps(summary, ensure_ascii=False, indent=2),
         encoding="utf-8",
